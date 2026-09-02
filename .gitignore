@@ -1,0 +1,8 @@
+# AI Hub / PhysioNet 등 원본 데이터는 재배포 제약이 있을 수 있어 제외
+data/
+models/
+webapp/app.log
+
+__pycache__/
+*.pyc
+.DS_Store

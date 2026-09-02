@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>mmWave 이상감지 대시보드</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --card: #131a22;
+    --border: #223040;
+    --text: #e6edf3;
+    --muted: #7d8b99;
+    --accent: #4fd1c5;
+    --danger: #f56565;
+    --ok: #48bb78;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    padding: 24px;
+    max-width: 960px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+  .subtitle {
+    font-size: 13px; color: var(--muted); margin-bottom: 18px; line-height: 1.6;
+  }
+  .subtitle b { color: var(--accent); }
+  .status-bar {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 20px; font-size: 13px; color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+  .dot.on { background: var(--ok); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .card .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .card .value { font-size: 32px; font-weight: 700; }
+  .card .unit { font-size: 13px; color: var(--muted); margin-left: 4px; }
+  .alert-card {
+    grid-column: span 2;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .alert-card.anomaly { border-color: var(--danger); background: #2a1416; }
+  .alert-card.normal { border-color: var(--ok); background: #12241a; }
+  .alert-label { font-size: 22px; font-weight: 700; }
+  .alert-card.anomaly .alert-label { color: var(--danger); }
+  .alert-card.normal .alert-label { color: var(--ok); }
+  .alert-prob { font-size: 13px; color: var(--muted); }
+  .threshold-box { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .threshold-box input { width: 100px; }
+  canvas { width: 100%; height: 220px; display: block; }
+  .chart-card .label { margin-bottom: 12px; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .daily-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .sleep-card .stage-name { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .sleep-card .caveat {
+    margin-top: 8px; font-size: 11px; color: var(--muted);
+    background: #1a1400; border: 1px solid #3a2f00; border-radius: 6px; padding: 8px 10px;
+  }
+  .note {
+    margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.6;
+  }
+  .section-title { font-size: 13px; color: var(--muted); margin: 24px 0 10px; text-transform: uppercase; letter-spacing: .04em; }
+</style>
+</head>
+<body>
+  <h1>mmWave 이상감지 대시보드</h1>
+  <div class="subtitle">
+    <b>AI Hub 71803</b>(독거노인 돌봄용 위험감지 데이터, Vital Ring 심박+호흡 → "주의/위험" 이진분류, F1 0.505)로 학습한 모델입니다.
+    학습 데이터는 노인 재택 환경이라 다른 환경에서는 확률값을 참고용으로만 보세요.
+  </div>
+  <div class="status-bar">
+    <div class="dot" id="conn-dot"></div>
+    <span id="conn-text">연결 확인 중...</span>
+    <span id="updated-at"></span>
+  </div>
+
+  <div class="grid">
+    <div class="card alert-card normal" id="alert-card">
+      <div>
+        <div class="label">상태 판정</div>
+        <div class="alert-label" id="alert-label">-</div>
+        <div class="alert-prob" id="alert-prob">확률 -</div>
+      </div>
+      <div class="threshold-box">
+        판정 임계값
+        <input type="range" id="threshold" min="0.1" max="0.9" step="0.05" value="0.5">
+        <span id="threshold-val">0.50</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">심박수</div>
+      <div><span class="value" id="hr">-</span><span class="unit">bpm</span></div>
+    </div>
+    <div class="card">
+      <div class="label">호흡수</div>
+      <div><span class="value" id="br">-</span><span class="unit">회/분</span></div>
+    </div>
+    <div class="card">
+      <div class="label">거리</div>
+      <div><span class="value" id="dist">-</span><span class="unit">cm</span></div>
+    </div>
+    <div class="card">
+      <div class="label">재실 여부</div>
+      <div class="value" id="presence">-</div>
+    </div>
+  </div>
+
+  <div class="section-title">오늘 요약</div>
+  <div class="grid daily-grid">
+    <div class="card">
+      <div class="label">오늘 평균 심박수</div>
+      <div><span class="value" id="daily-hr">-</span><span class="unit">bpm</span></div>
+    </div>
+    <div class="card">
+      <div class="label">오늘 평균 호흡수</div>
+      <div><span class="value" id="daily-br">-</span><span class="unit">회/분</span></div>
+    </div>
+    <div class="card">
+      <div class="label">오늘 이상 감지 횟수</div>
+      <div class="value" id="daily-count">-</div>
+    </div>
+  </div>
+
+  <div class="section-title">수면단계 추정 (참고용)</div>
+  <div class="card sleep-card">
+    <div class="label">현재 추정 단계</div>
+    <div class="stage-name" id="sleep-stage">-</div>
+    <div class="note" id="sleep-prob"></div>
+    <div class="caveat">
+      ⚠ 이 모델은 검증 정확도 34.5%로 낮습니다. 심박수/호흡수만으로 EEG 없이 수면단계(N1 특히)를
+      세밀하게 맞히는 건 학계에서도 어려운 문제로 알려져 있습니다 — 참고 지표로만 보세요.
+    </div>
+  </div>
+
+  <div class="section-title">최근 추이</div>
+  <div class="card chart-card">
+    <canvas id="chart"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:#4fd1c5"></span>심박수</span>
+      <span><span class="swatch" style="background:#f6ad55"></span>호흡수</span>
+    </div>
+  </div>
+
+  <div class="note">전체 기록은 data/processed/webapp_log.csv 에 계속 쌓입니다.</div>
+
+<script>
+const dpr = window.devicePixelRatio || 1;
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let threshold = 0.5;
+let notifyPermission = 'default';
+
+document.getElementById('threshold').addEventListener('input', (e) => {
+  threshold = parseFloat(e.target.value);
+  document.getElementById('threshold-val').textContent = threshold.toFixed(2);
+});
+
+if ('Notification' in window) {
+  Notification.requestPermission().then(p => notifyPermission = p);
+}
+
+function beep() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctxA = new AudioCtx();
+    const osc = ctxA.createOscillator();
+    const gain = ctxA.createGain();
+    osc.connect(gain); gain.connect(ctxA.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.2, ctxA.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctxA.currentTime + 0.4);
+    osc.start(); osc.stop(ctxA.currentTime + 0.4);
+  } catch (e) { /* 오디오 컨텍스트 사용 불가 환경은 조용히 무시 */ }
+}
+
+function notifyAnomaly(prob) {
+  beep();
+  if (notifyPermission === 'granted') {
+    new Notification('mmWave 이상 신호 감지', {
+      body: '이상 확률 ' + (prob * 100).toFixed(1) + '%',
+    });
+  }
+}
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resizeCanvas);
+
+function drawChart(history) {
+  resizeCanvas();
+  const w = canvas.getBoundingClientRect().width;
+  const h = canvas.getBoundingClientRect().height;
+  ctx.clearRect(0, 0, w, h);
+  if (history.length < 2) return;
+
+  const hrVals = history.map(p => p.heart_rate);
+  const brVals = history.map(p => p.breath_rate);
+  const allVals = hrVals.concat(brVals).filter(v => v !== null && v > 0);
+  if (!allVals.length) return;
+  const minV = Math.min(...allVals) - 5;
+  const maxV = Math.max(...allVals) + 5;
+
+  const pad = 10;
+  const x = i => pad + (i / (history.length - 1)) * (w - pad * 2);
+  const y = v => h - pad - ((v - minV) / (maxV - minV || 1)) * (h - pad * 2);
+
+  function drawLine(vals, color) {
+    ctx.beginPath();
+    let started = false;
+    vals.forEach((v, i) => {
+      if (v === null || v === undefined) return;
+      const px = x(i), py = y(v);
+      if (!started) { ctx.moveTo(px, py); started = true; }
+      else ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  drawLine(hrVals, '#4fd1c5');
+  drawLine(brVals, '#f6ad55');
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+
+    document.getElementById('conn-dot').className = 'dot' + (data.connected ? ' on' : '');
+    document.getElementById('conn-text').textContent = data.connected ? '센서 연결됨' : '센서 연결 안 됨';
+    document.getElementById('updated-at').textContent = data.updated_at ? ('· 마지막 업데이트 ' + data.updated_at) : '';
+
+    document.getElementById('hr').textContent = data.heart_rate ?? '-';
+    document.getElementById('br').textContent = data.breath_rate ?? '-';
+    document.getElementById('dist').textContent = data.distance_cm ?? '-';
+    document.getElementById('presence').textContent = data.presence ? '있음' : '없음';
+
+    document.getElementById('daily-hr').textContent = data.daily_avg_hr ?? '-';
+    document.getElementById('daily-br').textContent = data.daily_avg_br ?? '-';
+    document.getElementById('daily-count').textContent = data.daily_anomaly_count ?? '-';
+
+    document.getElementById('sleep-stage').textContent = data.sleep_stage ?? '-';
+    document.getElementById('sleep-prob').textContent = data.sleep_stage_prob
+      ? ('모델 확신도 ' + (data.sleep_stage_prob * 100).toFixed(1) + '%') : '';
+
+    const alertCard = document.getElementById('alert-card');
+    const alertLabel = document.getElementById('alert-label');
+    const alertProb = document.getElementById('alert-prob');
+    if (data.anomaly_prob === null || data.anomaly_prob === undefined) {
+      alertLabel.textContent = '데이터 대기 중';
+      alertProb.textContent = '';
+      alertCard.className = 'card alert-card normal';
+    } else {
+      const isAnomaly = data.anomaly_prob >= threshold;
+      alertLabel.textContent = isAnomaly ? '이상 신호 감지' : '정상';
+      alertProb.textContent = '이상 확률 ' + (data.anomaly_prob * 100).toFixed(1) + '% (임계값 ' + threshold.toFixed(2) + ')';
+      alertCard.className = 'card alert-card ' + (isAnomaly ? 'anomaly' : 'normal');
+      if (data.newly_anomalous && isAnomaly) notifyAnomaly(data.anomaly_prob);
+    }
+
+    drawChart(data.history || []);
+  } catch (e) {
+    document.getElementById('conn-text').textContent = '서버 연결 실패';
+  }
+}
+
+resizeCanvas();
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
