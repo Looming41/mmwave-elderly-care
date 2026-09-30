@@ -236,6 +236,14 @@ def serial_worker(port, baud):
             time.sleep(2)
 
 
+@app.after_request
+def add_cors_headers(response):
+    # Welfare_integrated_system(다른 오리진의 정적 페이지)에서 이 API를
+    # fetch로 불러 쓸 수 있게 허용. 로컬호스트 전용 API라 와일드카드로도 위험 적음.
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
