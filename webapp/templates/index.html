@@ -142,6 +142,17 @@
     </div>
   </div>
 
+  <div class="section-title">수면 무호흡 추정 (1분 단위, 참고용)</div>
+  <div class="card sleep-card">
+    <div class="label">최근 완료된 1분 구간 무호흡 확률</div>
+    <div class="stage-name" id="apnea-prob">-</div>
+    <div class="caveat">
+      ⚠ PhysioNet Apnea-ECG 데이터로 심박수만 가지고 학습한 모델입니다(AUC 0.70).
+      박동 간격 기반 심박변이도까지 쓰면 AUC 0.80까지 오르지만, mmWave 센서가
+      그 값을 안 줘서 심박수만 쓰는 버전입니다. 1분이 지나야 값이 갱신됩니다.
+    </div>
+  </div>
+
   <div class="section-title">수면단계 추정 (참고용)</div>
   <div class="card sleep-card">
     <div class="label">현재 추정 단계</div>
@@ -264,6 +275,9 @@ async function poll() {
     document.getElementById('daily-hr').textContent = data.daily_avg_hr ?? '-';
     document.getElementById('daily-br').textContent = data.daily_avg_br ?? '-';
     document.getElementById('daily-count').textContent = data.daily_anomaly_count ?? '-';
+
+    document.getElementById('apnea-prob').textContent = (data.apnea_prob !== null && data.apnea_prob !== undefined)
+      ? (data.apnea_prob * 100).toFixed(1) + '%' : '1분 대기 중...';
 
     document.getElementById('sleep-stage').textContent = data.sleep_stage ?? '-';
     document.getElementById('sleep-prob').textContent = data.sleep_stage_prob

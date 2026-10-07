@@ -30,7 +30,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import serial
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 LOG_PATH = os.path.join(
@@ -62,17 +62,52 @@ app = Flask(__name__)
 anomaly_model = joblib.load(os.path.join(MODELS_DIR, "anomaly_classifier.joblib"))
 sleep_model = joblib.load(os.path.join(MODELS_DIR, "sleep_stage_classifier.joblib"))
 
+# Apnea-ECG(PhysioNet)로 학습한 1분 단위 무호흡 모델. hr_only 서브모델만 쓴다 —
+# full 서브모델은 박동 간격 기반 심박변이도가 필요한데 mmWave가 못 주는 값이라서.
+_apnea_bundle = joblib.load(os.path.join(MODELS_DIR, "apnea_minute_classifier.joblib"))
+apnea_model = _apnea_bundle["hr_only"]["model"]
+APNEA_FEATURES = _apnea_bundle["hr_only"]["features"]  # hr_mean, hr_min, hr_max, hr_mean_roll_mean_5, hr_mean_roll_std_5
+
 state_lock = threading.Lock()
 history = deque(maxlen=HISTORY_MAX)  # (epoch_sec, heart_rate, breath_rate, distance_cm, presence)
+minute_hr_history = deque(maxlen=10)  # 최근 완료된 분들의 hr_mean (5분 롤링용)
+current_minute = {"key": None, "values": []}  # 진행 중인 1분 버킷의 심박수 샘플
 latest = {
     "heart_rate": None, "breath_rate": None, "distance_cm": None,
     "presence": 0, "anomaly_prob": None,
     "sleep_stage": None, "sleep_stage_prob": None,
+    "apnea_prob": None,
     "connected": False, "updated_at": None,
 }
 daily = {"date": None, "hr_sum": 0.0, "br_sum": 0.0, "n": 0, "anomaly_count": 0}
 prev_hr, prev_br = None, None
 prev_anomaly_flag = False
+
+
+def update_apnea_minute(ts, hr):
+    """1분(wall-clock) 단위로 심박수를 모아뒀다가, 분이 바뀌는 순간 직전 분의
+    hr_mean/min/max를 확정하고 최근 5분 롤링 통계와 함께 무호흡 확률을 계산한다.
+    """
+    minute_key = int(ts // 60)
+    if current_minute["key"] is None:
+        current_minute["key"] = minute_key
+    if minute_key != current_minute["key"] and current_minute["values"]:
+        vals = np.array(current_minute["values"])
+        hr_mean, hr_min, hr_max = float(vals.mean()), float(vals.min()), float(vals.max())
+        minute_hr_history.append(hr_mean)
+
+        roll_mean = float(np.mean(minute_hr_history))
+        roll_std = float(np.std(minute_hr_history)) if len(minute_hr_history) > 1 else 0.0
+
+        x = pd.DataFrame(
+            [[hr_mean, hr_min, hr_max, roll_mean, roll_std]], columns=APNEA_FEATURES
+        )
+        prob = float(apnea_model.predict_proba(x)[0, 1])
+        latest["apnea_prob"] = round(prob, 3)
+
+        current_minute["key"] = minute_key
+        current_minute["values"] = []
+    current_minute["values"].append(hr)
 
 
 def _init_log():
@@ -208,6 +243,7 @@ def serial_worker(port, baud):
                         stage_prob = float(max(stage_proba))
 
                         history.append((now_ts, hr, br, distance, presence))
+                        update_apnea_minute(now_ts, hr)
 
                         is_anomaly = prob >= 0.5
                         newly_anomalous = is_anomaly and not prev_anomaly_flag
@@ -238,9 +274,15 @@ def serial_worker(port, baud):
 
 @app.after_request
 def add_cors_headers(response):
-    # Welfare_integrated_system(다른 오리진의 정적 페이지)에서 이 API를
-    # fetch로 불러 쓸 수 있게 허용. 로컬호스트 전용 API라 와일드카드로도 위험 적음.
+    # Welfare_integrated_system(다른 오리진의 정적 페이지, GitHub Pages의 https://
+    # 포함)에서 이 API를 fetch로 불러 쓸 수 있게 허용. 로컬호스트 전용 API라
+    # 와일드카드로도 위험 적음.
     response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    # Chrome의 Private Network Access: https:// 공개 페이지가 localhost 같은
+    # 사설/루프백 주소를 호출할 때 이 헤더가 없으면 preflight에서 막힌다.
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
     return response
 
 
@@ -249,8 +291,10 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/status")
+@app.route("/api/status", methods=["GET", "OPTIONS"])
 def api_status():
+    if request.method == "OPTIONS":
+        return "", 204  # PNA/CORS preflight 응답 (실제 데이터 없이 헤더만)
     with state_lock:
         hist = [
             {"t": t, "heart_rate": hr, "breath_rate": br}
